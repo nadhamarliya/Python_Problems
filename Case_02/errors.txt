@@ -1,0 +1,4 @@
+src/app.py:12:5: E722 Do not use bare except
+src/main.py:20: E501 Line too long
+This is garbage
+src/utils.py:8:2: F401 Imported but unused

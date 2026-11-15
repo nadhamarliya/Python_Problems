@@ -10,82 +10,60 @@ class Finding:
     severity: str
     tools: tuple[str, ...]
 
+SEVERITY_MAP = {"ERROR": "HIGH","WARNING": "MEDIUM","INFO": "LOW","HIGH": "HIGH","MEDIUM": "MEDIUM","LOW": "LOW","NONE": "NONE"}
+SEVERITY_RANKS = {"HIGH": 3,"MEDIUM": 2,"LOW": 1,"NONE": 0}
 
 """normalises file paths to a standard format"""
 def normalise_path(path: str) -> str:
     if not path:
         return ""
 
-    cleaned= path.replace("\\","/")
-    path_obj= Path(cleaned)
-    normalise_str = path_obj.as_posix()
-    if normalise_str.startswith("./"):
-        normalise_str = normalise_str.removeprefix("./")
-
-
-    return normalise_str
+    return Path(path.replace("\\", "/")).as_posix().removeprefix("./").lower()
 
 """normalises severity levels to a standard set of values: HIGH, MEDIUM, LOW, NONE. If the input is unrecognised, defaults to LOW."""
-def normalise_severity(raw_severity) -> str:
+def normalise_severity(raw_severity: object) -> str:
     if not raw_severity:
-        return "LOW"
+        return "NONE"
 
-    sev_str = str(raw_severity).upper()
-    if sev_str == "ERROR":
-        return "HIGH"
-    if sev_str == "WARNING":
-        return "MEDIUM"
-    if sev_str == "INFO":
-        return "LOW"
-
-    if sev_str in ("HIGH", "MEDIUM", "LOW", "NONE"):
-        return sev_str
-        
-    return "LOW"
+    severity = str(raw_severity).upper()
+    return SEVERITY_MAP.get(severity, "NONE")
     
 """converts line numbers from strings, ints, or None."""
-def parse_line_number(raw_line) -> int | None:
-    if raw_line is None:
+def parse_line_number(raw_line: object) -> int | None:
+    if raw_line is None or isinstance(raw_line, bool):
         return None
     try:
         return int(raw_line)
-    except (ValueError, TypeError):
+    except (ValueError, TypeError, OverflowError):
         return None
 
 """Extracts a CWE string from dicts, lists, or plain strings."""
 
-def parse_cwe(raw_cwe) -> str:
-    if not raw_cwe:
+def parse_cwe(raw_cwe: object) -> str:
+    # Extract CWE from dictionary
+    if isinstance(raw_cwe, dict):
+        raw_cwe = raw_cwe.get("id")
+
+    # Extract first CWE from list
+    elif isinstance(raw_cwe, list):
+        raw_cwe = raw_cwe[0] if raw_cwe else None
+
+    # Handle missing or empty values
+    if raw_cwe is None:
         return "NONE"
-        
-    # Bandit-style: {"id": 89}
-    if isinstance(raw_cwe, dict): #check the type of raw_cwe to see if it is a dictionary
-        cwe_id = raw_cwe.get("id")
-        return f"CWE-{cwe_id}" if cwe_id is not None else "NONE" # Return the CWE string or "NONE" if the ID is not found
-        
-    # Semgrep-style: ["CWE-89: Improper Neutralization ..."]
-    if isinstance(raw_cwe, list) and len(raw_cwe) > 0: #check if raw_cwe is a list and has at least one item
-        first_item = str(raw_cwe[0])
-        # Extract just the CWE-XX part if it contains a colon or description
-        if "CWE-" in first_item.upper():
-            parts = first_item.split(":")
-            return parts[0].strip().upper()
-        return first_item
-        
-    # Plain string
-    if isinstance(raw_cwe, str):
-        cleaned = raw_cwe.strip()
-        if not cleaned or cleaned.upper() == "NONE":
-            return "NONE"
-        if "CWE-" in cleaned.upper():
-            return cleaned.split(":")[0].strip().upper()
-        return f"CWE-{cleaned}"
-        
-    return "NONE"
+
+    cwe = str(raw_cwe).strip().upper()
+
+    if not cwe or cwe == "NONE":
+        return "NONE"
+
+    if cwe.startswith("CWE-"):
+        return cwe.split(":")[0].strip()
+
+    return f"CWE-{cwe}"
 
 """Transforms a raw Bandit finding dictionary into a standard Finding object"""
 def normalise_bandit(raw: dict) -> Finding | None:
-
     if not raw:
         return None
         
@@ -115,7 +93,7 @@ def normalise_semgrep(raw: dict) -> Finding | None:
     path = normalise_path(raw.get("path"))
     
     # Semgrep nests line number under 'start' -> 'line'
-    start_data = raw.get("start", {}) #using {} as a default to avoid KeyError if 'start' is missing
+    start_data = raw.get("start")
     raw_line = start_data.get("line") if isinstance(start_data, dict) else None # Extract the line number
     line = parse_line_number(raw_line) #normalise the line number
     
@@ -123,13 +101,11 @@ def normalise_semgrep(raw: dict) -> Finding | None:
         return None
         
     # Semgrep nests extra -> metadata -> cwe and extra -> severity
-    extra = raw.get("extra", {})
-    if not isinstance(extra, dict):
-        extra = {}
-        
-    metadata = extra.get("metadata", {})
-    if not isinstance(metadata, dict):
-        metadata = {}
+    extra = raw.get("extra")
+    extra = extra if isinstance(extra, dict) else {}
+    
+    metadata = extra.get("metadata")
+    metadata = metadata if isinstance(metadata, dict) else {}
         
     cwe = parse_cwe(metadata.get("cwe"))
     severity = normalise_severity(extra.get("severity"))
@@ -151,7 +127,7 @@ def normalise_ruff(raw: dict) -> Finding | None:
     path = normalise_path(raw.get("filename"))
     
     # Ruff nests row under 'location' -> 'row'
-    location = raw.get("location", {})
+    location = raw.get("location")
     raw_line = location.get("row") if isinstance(location, dict) else None
     line = parse_line_number(raw_line)
     
@@ -160,7 +136,7 @@ def normalise_ruff(raw: dict) -> Finding | None:
         
     # Ruff has no CWE in this format so use "NONE"
     cwe = "NONE"
-    severity = normalise_severity("INFO")  # Maps to LOW
+    severity = "LOW"  # Default INFO -> LOW
     
     return Finding(
         path=path,
@@ -172,44 +148,29 @@ def normalise_ruff(raw: dict) -> Finding | None:
 
 #MERGE FUNCTION PART
 
-# Numerical values to determine severity
-SEVERITY_RANKS = {
-    "HIGH": 3,
-    "MEDIUM": 2,
-    "LOW": 1,
-    "NONE": 0
-}
-
 """Compares two severity strings and returns the higher one"""
-def get_highest_severity(sev1: str, sev2: str) -> str:
+def highest_severity(sev1: str, sev2: str) -> str:
+    rank1 = SEVERITY_RANKS.get(sev1, 0)
+    rank2 = SEVERITY_RANKS.get(sev2, 0)
 
-    rank1 = SEVERITY_RANKS.get(sev1.upper(), 0)
-    rank2 = SEVERITY_RANKS.get(sev2.upper(), 0)
     return sev1 if rank1 >= rank2 else sev2
 
     
-"""Combines two tool tuples, removes duplicates, and sorts them alphabetically"""
-def merge_tools(tools_1: tuple[str, ...], tools_2: tuple[str, ...]) -> tuple[str, ...]:
-    combined = set(tools_1).union(set(tools_2))
-    return tuple(sorted(combined))
-
 """Collapses a cluster of overlapping findings into a single unified Finding."""
-def _reduce_cluster(path: str, cwe: str, cluster: list[Finding]) -> Finding:
-    min_line = cluster[0].line
-    
+def reduce_cluster(path: str, cwe: str, cluster: list[Finding]) -> Finding:
     highest_sev = "NONE"
-    all_tools = ()
+    all_tools = set()
     
-    for f in cluster:
-        highest_sev = get_highest_severity(highest_sev, f.severity)
-        all_tools = merge_tools(all_tools, f.tools)
+    for finding in cluster:
+        highest_sev = highest_severity(highest_sev, finding.severity)
+        all_tools.update(finding.tools)
         
     return Finding(
         path=path,
-        line=min_line,
+        line=cluster[0].line,
         cwe=cwe,
         severity=highest_sev,
-        tools=all_tools
+        tools=tuple(sorted(all_tools))
     )
 
 
@@ -224,6 +185,7 @@ def merge(findings: list[Finding], tol: int = 2) -> list[Finding]:
 
     #Group findings by (path, cwe) 
     groups = defaultdict(list)
+
     for f in findings:
         groups[(f.path, f.cwe)].append(f)
 
@@ -231,16 +193,12 @@ def merge(findings: list[Finding], tol: int = 2) -> list[Finding]:
 
     #Process each bucket independently
     for (path, cwe), group in groups.items():
-        # Sort the group by line number ascending
-        sorted_group = sorted(group, key=lambda x: x.line)
-        
-        if not sorted_group:
-            continue
+        sorted_group = sorted(group, key=lambda x: x.line)# Sort the group by line number 
 
         # Initialise irst cluster with the first finding
         current_cluster = [sorted_group[0]]
         
-        # Merging & Chaining Loop
+        # Merge using chaining
         for current in sorted_group[1:]:
             last_finding = current_cluster[-1]
             
@@ -249,12 +207,11 @@ def merge(findings: list[Finding], tol: int = 2) -> list[Finding]:
                 current_cluster.append(current)
             else:
                 # if Gap exceeds tol then finalize current cluster and start a new one
-                merged_findings.append(_reduce_cluster(path, cwe, current_cluster))
+                merged_findings.append(reduce_cluster(path, cwe, current_cluster))
                 current_cluster = [current]
         
         # Append the final remaining cluster in this bucket
-        if current_cluster:
-            merged_findings.append(_reduce_cluster(path, cwe, current_cluster))
+        merged_findings.append(reduce_cluster(path, cwe, current_cluster))
 
     # sort all merged findings by path, then line number ascending
     return sorted(merged_findings, key=lambda f: (f.path, f.line))
@@ -287,7 +244,7 @@ def normalise_finding(raw: dict) -> Finding | None:
     Ingests raw reports, normalises them 
     into a list of Finding objects, and runs the merge function
 """
-def run_security_pipeline(raw_reports: list[dict], tol: int = 2) -> list[Finding]:
+def main_pipeline(raw_reports: list[dict], tol: int = 2) -> list[Finding]:
 
     unified_findings: list[Finding] = []
     
@@ -301,3 +258,4 @@ def run_security_pipeline(raw_reports: list[dict], tol: int = 2) -> list[Finding
     final_merged_report = merge(unified_findings, tol=tol)
     
     return final_merged_report
+

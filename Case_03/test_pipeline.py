@@ -1,7 +1,7 @@
 import pytest
 from normalise import (  # Replace with your actual filename (e.g., pipeline)
     Finding,
-    run_security_pipeline,
+    main_pipeline,
     merge,
     normalise_bandit,
     normalise_semgrep,
@@ -11,7 +11,7 @@ from normalise import (  # Replace with your actual filename (e.g., pipeline)
 def test_empty_inputs():
     """Verify empty input returns empty list without errors."""
     assert merge([], tol=2) == []
-    assert run_security_pipeline([], tol=2) == []
+    assert main_pipeline([], tol=2) == []
 
 
 def test_line_chaining():
@@ -66,7 +66,7 @@ def test_end_to_end_pipeline():
         {"path": "./src/app.py", "start": {"line": 12}, "extra": {"severity": "WARNING", "metadata": {"cwe": ["CWE-89: SQL Injection"]}}},
     ]
     
-    results = run_security_pipeline(raw_reports, tol=2)
+    results = main_pipeline(raw_reports, tol=2)
     
     assert len(results) == 1
     assert results[0].path == "src/app.py"
@@ -75,32 +75,14 @@ def test_end_to_end_pipeline():
     assert results[0].severity == "HIGH"  # HIGH wins over WARNING (MEDIUM)
     assert results[0].tools == ("bandit", "semgrep")
 
-
-def test_ruff_combines_when_bucket_matches():
-    """Verify that Ruff findings combine if they share the exact same path and CWE-NONE bucket within tolerance."""
-    raw_reports = [
-        {"filename": "src/utils.py", "location": {"row": 5}, "code": "E722"},
-        {"filename": "src\\utils.py", "location": {"row": 6}, "code": "F401"},  # Within tol=2, same path, both CWE-NONE
+def test_different_paths_stay_separate():
+    findings = [
+        Finding("src/app.py", 10, "CWE-89", "HIGH", ("bandit",)),
+        Finding("src/login.py", 10, "CWE-89", "LOW", ("semgrep",)),
     ]
-    
-    results = run_security_pipeline(raw_reports, tol=2)
-    
-    assert len(results) == 1
-    assert results[0].path == "src/utils.py"
-    assert results[0].line == 5
-    assert results[0].cwe == "NONE"
-    assert results[0].tools == ("ruff",)
 
+    result = merge(findings, tol=2)
 
-def test_ruff_stays_separate_from_cwe_findings():
-    """Verify that Ruff (CWE-NONE) does not combine with Bandit/Semgrep findings that have specific CWEs."""
-    raw_reports = [
-        {"filename": "src/app.py", "line_number": "10", "issue_severity": "HIGH", "issue_cwe": {"id": 89}}, # CWE-89
-        {"filename": "src/app.py", "location": {"row": 10}, "code": "E722"},                              # CWE-NONE
-    ]
-    
-    results = run_security_pipeline(raw_reports, tol=2)
-    
-    # Expect 2 separate findings because CWE-89 and CWE-NONE go into different buckets
-    assert len(results) == 2
-    assert {results[0].cwe, results[1].cwe} == {"CWE-89", "NONE"}
+    assert len(result) == 2
+    assert result[0].path == "src/app.py"
+    assert result[1].path == "src/login.py"

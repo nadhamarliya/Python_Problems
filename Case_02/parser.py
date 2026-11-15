@@ -4,7 +4,7 @@ import os
 import re
 from typing import Optional
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True) #slots=True for memory efficiency and faster attribute access
 class Finding:
     path: str
     line: int
@@ -13,9 +13,6 @@ class Finding:
     message: str
 
 # Pre-compile the regex pattern once at the module level for performance
-# - ^ and $ ensure the match spans the entire cleaned line
-# - (?:[A-Za-z]:)? handles Windows drive letters without confusing colons
-# - [^:]+ consumes paths cleanly, including spaces and unicode
 LOG_PATTERN = re.compile(
     r"^(?P<path>(?:[A-Za-z]:)?[^:]+):(?P<line>\d+)(?::(?P<col>\d+))?: (?P<error>[A-Z]\d+)\s+(?P<message>.+)$"
 )
@@ -28,9 +25,10 @@ def parse_file(path: str | os.PathLike) -> Iterator[Finding]:
     # encoding="utf-8" to ensure cross-platform compatibility
     with open(path, "r", encoding="utf-8") as file:
         for raw_line in file:
-            finding = parse_line(raw_line)
-            if finding is not None:
-                yield finding
+            if not raw_line.isspace() and raw_line != "\n":
+                 finding = parse_line(raw_line)
+                 if finding is not None:
+                     yield finding
 
 def parse_line(line: str) -> Optional[Finding]:
     """
@@ -41,7 +39,7 @@ def parse_line(line: str) -> Optional[Finding]:
         raise TypeError("Input must be a string")
 
     # Strip trailing newlines (\n) and whitespace
-    cleaned_line = line.strip()
+    cleaned_line = line.rstrip("\r\n")
     if not cleaned_line:
         return None
 
